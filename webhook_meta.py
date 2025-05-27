@@ -28,13 +28,39 @@ def webhook():
             models = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object")
 
             for entry in data.get("entry", []):
-                for msg_event in entry.get("messaging", []):
-                    sender = msg_event["sender"]["id"]
-                    message = msg_event.get("message", {}).get("text", "")
-                    if message:
-                        models.execute_kw(ODOO_DB, uid, ODOO_PASS,
-                            'mail.channel', 'channel_send_message',
-                            [[sender], message])
+                platform = 'facebook' if 'messaging' in entry else 'instagram'
+                events = entry.get("messaging") or entry.get("changes", [])
+
+                for event in events:
+                    if platform == 'facebook':
+                        sender = event.get("sender", {}).get("id")
+                        message = event.get("message", {}).get("text")
+                    else:
+                        sender = event.get("value", {}).get("from", {}).get("id")
+                        message = event.get("value", {}).get("message")
+
+                    if not message:
+                        continue
+
+                    # Crear o buscar canal en Odoo
+                    channel_name = f"{platform.upper()} - {sender}"
+                    channel_ids = models.execute_kw(ODOO_DB, uid, ODOO_PASS, 'mail.channel', 'search', [[['name', '=', channel_name]]])
+                    if channel_ids:
+                        channel_id = channel_ids[0]
+                    else:
+                        channel_id = models.execute_kw(ODOO_DB, uid, ODOO_PASS, 'mail.channel', 'create', [{
+                            'name': channel_name,
+                            'channel_type': 'channel',
+                            'public': 'public',
+                        }])
+
+                    # Enviar mensaje
+                    models.execute_kw(ODOO_DB, uid, ODOO_PASS, 'mail.channel', 'message_post', [channel_id, {
+                        'body': message,
+                        'message_type': 'comment',
+                        'subtype_xmlid': 'mail.mt_comment',
+                    }])
+
         except Exception as e:
             return f"Error: {str(e)}", 500
 
@@ -42,4 +68,3 @@ def webhook():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
-
